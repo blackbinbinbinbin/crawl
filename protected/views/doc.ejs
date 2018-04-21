@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>文档中心</title>
+<link rel="stylesheet" href="/public/css/bootstrap.min.css">
+<link rel="stylesheet" href="/public/js/treeTable/vsStyle/jquery.treeTable.css">
+<style>
+ .red {color:red;}
+ .result div { display:none; }
+ .result div:nth-child(1) { display:block; }
+</style>
+
+</head>
+<body>
+<div class="container">
+    <table id="class_list" class='table'>
+        <thead>
+            <tr>
+                <th class="th">接口名</th>
+                <th class="th">作者</th>
+                <th class="th">注释</th>
+            </tr>
+        </thead>
+        <tbody>
+            <% for(var i in classInfos) { %>
+            <tr id="<%= i %>">
+                <th><span controller="true" style="font-size:16px;"><%= i %></span></th>
+                <td><%= classInfos[i]['author'] %></td>
+                <td class="td"><%= classInfos[i]['desc'] %></td>
+            </tr>
+            <% for(var o in classInfos[i]['funcs']) { %>
+            <% var func = classInfos[i]['funcs'][o] %>
+            <tr id="<%= i + '_' + o %>" pId="<%= o %>" hasChild="<%= func['param'].length > 0 ? 'true' : '' %>">
+                <th>
+                    <span controller="true" style="font-size:16px;"><%= i + '/' + o%></span>
+                </th>
+                <td class="td"><%= func['author'] %></td>
+                <td class="td"><%= func['desc'] %></td>
+            </tr>
+            <% } %>
+            <% } %>
+        </tbody>
+    </table>
+</div>
+
+<script src="/public/js/jquery-1.10.2.js"></script>
+<script src="/public/js/bootstrap.min.js"></script>
+<script src="/public/js/treeTable/jquery.treeTable.js"></script>
+<script src="/public/js/doc.js"></script>
+
+</body>
+</html>

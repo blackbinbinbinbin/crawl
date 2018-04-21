@@ -1,0 +1,45 @@
+// 常量
+<% foreach ($configs['string'] as $k => $v):%>
+<% !is_numeric($v) && $v = "'{$v}'"; %>
+global["<%=$k;%>"] = <%=$v;%>;
+<% endforeach;%>
+
+// 数组
+<% 
+$_hash = []; 
+$_subHash = [];
+%>
+<% foreach ($configs['hash'] as $k => $v):%>
+<%
+$k = explode('][', $k);
+$subKey = '';
+$subKey2 = '';
+$m = [];
+
+if (count($k) > 1 && preg_match("/\'(.+)\'/i", $k[1], $m)) {
+    $subKey = $m[1];
+}
+
+if (count($k) > 2 && preg_match("/\'(.+)\'/i", $k[2], $m)) {
+    $subKey2 = $m[1];
+}
+
+$k = $k[0];
+if (!preg_match("/\'(.+)\'/i", $k, $m)) {
+    continue;
+}
+$k = $m[1];
+%> 
+<% if (!$_hash[$k]): %>
+<% $_hash[$k] = 1; %>
+var <%=$k%> = {};
+<% endif;%>
+<% if ($subKey2 && !$_subHash["{$k}_{$subKey}"]): %>
+<% $_subHash["{$k}_{$subKey}"] = 1; %>
+<%=$k%>["<%=$subKey%>"] = {};
+<% endif;%>
+<%=$k%><% if ($subKey): %>["<%=$subKey%>"]<% endif; %><% if ($subKey2): %>["<%=$subKey2%>"]<% endif; %> = <%= JSON.stringify($v, JSON_UNESCAPED_UNICODE); %>;<% endforeach;%>
+
+<% foreach ($_hash as $k => $v): %>
+exports["<%=$k%>"] = <%=$k%>;
+<% endforeach %>
