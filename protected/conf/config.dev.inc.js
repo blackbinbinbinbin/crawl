@@ -3,25 +3,25 @@ global['DEBUG'] = true;
 global['TYPE_SELF_CALL'] = 'test_spider_self_call';
 global['TYPE_MODULE_CALL'] = 'test_spider_self_call';
 
-// let dbInfo = {};
-//
-// dbInfo['Web'] = {
-//     host : '61.160.36.225',
-//     user : 'ojiatest',
-//     password : 'ojia305',
-//     database : 'Web',
-//     port : 3306,
-//     connectionLimit : 100
-// };
-//
-// dbInfo['Report'] = {
-//     host : '61.160.36.225',
-//     user : 'ojiatest',
-//     password : 'ojia305',
-//     database : 'Report',
-//     port : 3306,
-//     connectionLimit : 100
-// };
+let dbInfo = {};
+
+dbInfo['Web'] = {
+    host : '127.0.0.1',
+    user : 'root',
+    password : 'root',
+    database : 'Web',
+    port : 3306,
+    connectionLimit : 100
+};
+
+dbInfo['Report'] = {
+    host : '127.0.0.1',
+    user : 'root',
+    password : 'ojia305',
+    database : 'Report',
+    port : 3306,
+    connectionLimit : 100
+};
 //
 // dbInfo['crawl'] = {
 //     host : '61.160.36.225',
