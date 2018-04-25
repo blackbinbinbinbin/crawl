@@ -23,14 +23,14 @@ dbInfo['Report'] = {
     connectionLimit : 100
 };
 //
-// dbInfo['crawl'] = {
-//     host : '61.160.36.225',
-//     user : 'ojiatest',
-//     password : 'ojia305',
-//     database : 'crawl',
-//     port : 3306,
-//     connectionLimit : 100
-// };
+dbInfo['crawl'] = {
+    host : '127.0.0.1',
+    user : 'root',
+    password : 'root',
+    database : 'crawl',
+    port : 3306,
+    connectionLimit : 100
+};
 //
 // dbInfo['dw_pc'] = {
 //     host : '61.160.36.225',

@@ -12,10 +12,13 @@ class NameServiceController extends Controller {
         this.i = 0;
     }
 
-    actionNsConfigEnv(args) {
+    async actionNsConfigEnv(args) {
     	let node_name = args['node_name'];
     	let env = args['env'];
     	let targetEnv = args['targetEnv'];
+        if (!node_name || !env || !targetEnv) {
+            this.exitMsg("参数错误");
+        }
 
     	if (targetEnv == 'new') {
             this.exitMsg('暂时不支持预发布环境');
@@ -23,32 +26,30 @@ class NameServiceController extends Controller {
             this.exitMsg('暂时不支持正式环境');
         }
 
-        // const obTask = new TableHelper('task', 'crawl');
-        // let task = await obTask.getRow({task_id});
         const obNsNode = new TableHelper('ns_node', 'Web');
         let where = {node_name, env};
-        let nodeInfo = obNsNode.getRow(where);
+        let nodeInfo = await obNsNode.getRow(where);
 
         if (!nodeInfo) {
         	this.exitMsg("节点：" + node_name +", env："+ env +" 没有数据");
         }
 
-        this._writeConfigFile(env, nodeInfo);
+        //this._writeConfigFile(env, nodeInfo);
     }
 
-    _writeConfigFile(env, nsNodes) {
+    async _writeConfigFile(env, nsNodes) {
     	if (!nsNodes) {
 	        return false;
 	    }
 	    let name = nsNodes['dir_1'];
         let objNode = new TableHelper('ns_node', 'Web');
         let _field = 'node_name, node_type, value_type, node_value, node_tips';
-        $where1 = {
+        let where1 = {
             'dir_1' : name,
             'env' : [env, 7],
             'enable' : 1
         };
-        let datas = objNode.getAll($where1, {_field});
+        let datas = await objNode.getAll(where1, {_field});
         if (!datas) {
             this.exitMsg('没有数据');
         }
@@ -61,13 +62,13 @@ class NameServiceController extends Controller {
         }
 
         let objHashTable = new TableHelper('ns_hash_table', 'Web');
-        $where2 = {
+        let where2 = {
             'node_name' : hashKeys,
             'env' : [env, 7],
             'enable' : 1
         };
-        let _field = 'node_name,key_name,key_value,value_type';
-        let hashDatas = objHashTable.getAll($where2, {_field});
+        _field = 'node_name,key_name,key_value,value_type';
+        let hashDatas = await objHashTable.getAll(where2, {_field});
         let tmp = [];
         for (var i = hashDatas.length - 1; i >= 0; i--) {
         	tmp[hashDatas[i].node_name] = hashDatas[i];
@@ -119,11 +120,11 @@ class NameServiceController extends Controller {
 	            configs['string'][info_name[1]] = info['node_value'];
 	        }
 	    }
-	    var_dump(configs);exit();
+	    console.log(configs);
 	    let tmpl = 'js';
 	    let strConfig = Template.render('name_server/js');
-	    $path = CONF_PATH . "config.{$name}.inc.{$tmpl}";
-	    let path = '../framework/lib/OujRedis';
+	    let path = CONF_PATH + "config."+name+".inc.js";
+
 	    // let template = Template.init();
 	    // $template->assign(compact('configs'));
 	    // $strConfig = $template->fetch("name_server/{$tmpl}");
@@ -150,3 +151,5 @@ class NameServiceController extends Controller {
 	    return str;
 	}
 }
+
+module.exports = NameServiceController;
