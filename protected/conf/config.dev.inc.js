@@ -81,5 +81,5 @@ dbInfo['crawl'] = {
 
 process.env.PORT = 9998;
 //
-// exports.dbInfo = dbInfo;
+exports.dbInfo = dbInfo;
 // exports.redisInfo = redisInfo;

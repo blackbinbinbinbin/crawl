@@ -9,7 +9,7 @@ class NameServiceController extends Controller {
     //var i = 0;
     constructor(req, res) {
         super(req, res);
-        this.i = 0;
+        this.i = 1;
     }
 
     async actionNsConfigEnv(args) {
@@ -17,24 +17,26 @@ class NameServiceController extends Controller {
     	let env = args['env'];
     	let targetEnv = args['targetEnv'];
         if (!node_name || !env || !targetEnv) {
-            this.exitMsg("参数错误");
+            this.error(CODE_PARAM_ERROR, "参数错误");
         }
 
     	if (targetEnv == 'new') {
-            this.exitMsg('暂时不支持预发布环境');
+            this.error(CODE_NORMAL_ERROR, '暂时不支持预发布环境');
         } else if (targetEnv == 'formal') {
-            this.exitMsg('暂时不支持正式环境');
+            this.error(CODE_NORMAL_ERROR, '暂时不支持正式环境');
         }
 
         const obNsNode = new TableHelper('ns_node', 'Web');
+
         let where = {node_name, env};
         let nodeInfo = await obNsNode.getRow(where);
-
+        
         if (!nodeInfo) {
-        	this.exitMsg("节点：" + node_name +", env："+ env +" 没有数据");
+        	this.error(CODE_NORMAL_ERROR, "节点：" + node_name +", env："+ env +" 没有数据");
         }
 
-        //this._writeConfigFile(env, nodeInfo);
+
+        await this._writeConfigFile(env, nodeInfo);
     }
 
     async _writeConfigFile(env, nsNodes) {
@@ -69,6 +71,7 @@ class NameServiceController extends Controller {
         };
         _field = 'node_name,key_name,key_value,value_type';
         let hashDatas = await objHashTable.getAll(where2, {_field});
+
         let tmp = [];
         for (var i = hashDatas.length - 1; i >= 0; i--) {
         	tmp[hashDatas[i].node_name] = hashDatas[i];
@@ -79,11 +82,15 @@ class NameServiceController extends Controller {
             if (datas[k].node_type == 'hash_table') {
                 datas[k].items = hashDatas[datas[k].node_name];
             }
+
+            if (datas[k].node_type == 'BS2_ACCESS_KEY') {
+                console.log(datas[k]);
+            }
         }
 
         nsNodes = datas;
         // 特殊的一级目录
-        //    if ($name == 'code') {
+           // if ($name == 'code') {
         let items = [];
         for (let k in nsNodes) {
             if (nsNodes[k].node_type == 'code') {
@@ -102,8 +109,9 @@ class NameServiceController extends Controller {
                 'items' : items,
             });
         }
-
-	    let configs = [];
+	    let configs = {};
+        configs['hash'] = {};
+        configs['string'] = {};
 	    for (let i = 0; i < nsNodes.length; i++) {
 	        let info = nsNodes[i];
 	        let info_name = info['node_name'];
@@ -111,36 +119,31 @@ class NameServiceController extends Controller {
 	        if (info['node_type'] === 'hash_table') {
 	            let keyName = this.getArrayKey(info['node_name']);
 	            let hashTables = info['items'];
-	            let value = [];
-	            for (let table of hashTables) {
-	                value[table['key_name']] = table['key_value'];
+	            let value = {};
+	            for (var key in hashTables) {
+	                value[key] = hashTables[key];
 	            }
 	            configs['hash'][keyName] = value;
 	        } else {
-	            configs['string'][info_name[1]] = info['node_value'];
+                configs['string'][info_name[1]] = info['node_value'];
 	        }
 	    }
-	    console.log(configs);
+        //configs 为名字服务器内的配置
+        //TODO 用 /views/name_server/js.ejs 模板渲染出 js 配置文件，和cjms的做法一样
+        //这里简便一点，直接复制 cjms 的。。。。	   
 	    let tmpl = 'js';
-	    let strConfig = Template.render('name_server/js');
-	    let path = CONF_PATH + "config."+name+".inc.js";
-
-	    // let template = Template.init();
-	    // $template->assign(compact('configs'));
-	    // $strConfig = $template->fetch("name_server/{$tmpl}");
-	    // if ($tmpl == 'php') {
-	    //     $strConfig = "<?php\n" . $strConfig;
-	    // }
-	    // $now = date('Y-m-d H:i:s');
-	    // $result = 1;
-	    // if (file_put_contents($path, $strConfig)) {
-	    //     var_dump("[{$now}] path:{$path} 生成配置成功");
-	    //     ob_flush();
-	    // } else {
-	    //     $result = -1;
-	    //     var_dump("[{$now}] path:{$path} 生成配置失败");
-	    //     ob_flush();
-	    // }
+        var fs = require("fs");  
+        let path = "conf_ns/config."+name+".inc.js";
+        //this.success('../../cjms/protected/conf/' + path);
+        let that = this;
+        var data = fs.readFileSync('../../cjms/protected/conf/' + path, 'utf8');
+        fs.writeFile(CONF_PATH + "/config."+name+".inc.js", data, function(err) {
+            if (err) {
+                that.error(err); 
+            } else {
+                that.success();
+            }
+        });
     }
 
     getArrayKey(keyName) {
