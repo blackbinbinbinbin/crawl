@@ -50,7 +50,7 @@ dbInfo['crawl'] = {
 //     connectionLimit : 100
 // };
 //
-// let redisInfo = {};
+let redisInfo = {};
 // redisInfo['name_serv'] = {
 //     'host' : '61.160.36.225',
 //     'port' : 6405,
@@ -66,12 +66,12 @@ dbInfo['crawl'] = {
 //     db : 1
 // };
 //
-// redisInfo['logstash_redis'] = {
-//     host : '61.160.36.225',
-//     port : 6407,
-//     pwd : 'ojia123',
-//     db : 2
-// };
+redisInfo['logstash_redis'] = {
+    host : '61.160.36.225',
+    port : 6407,
+    pwd : 'ojia123',
+    db : 2
+};
 //
 // redisInfo['logic'] = {
 //     host : "61.160.36.225",
@@ -82,4 +82,4 @@ dbInfo['crawl'] = {
 process.env.PORT = 9998;
 //
 exports.dbInfo = dbInfo;
-// exports.redisInfo = redisInfo;
+exports.redisInfo = redisInfo;

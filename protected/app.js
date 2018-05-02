@@ -99,14 +99,14 @@ function main(req, res, next) {
 // 捕捉全局异常
 // uncaughtException 避免程序崩溃
 process.on('uncaughtException', function(err) {
-    let CallLog = require('./framework/lib/CallLog.js');
-    // 记录访问日志
-    let objCallLog = new CallLog(null);
-    let msg = err.message && err.message.message;
-    objCallLog.logSelfCall(CODE_UNKNOW_ERROT, msg);
-    setTimeout(function() {
-        process.exit(1);
-    }, 100);
+    // let CallLog = require('./framework/lib/CallLog.js');
+    // // 记录访问日志
+    // let objCallLog = new CallLog(null);
+    // let msg = err.message && err.message.message;
+    // objCallLog.logSelfCall(CODE_UNKNOW_ERROT, msg);
+    // setTimeout(function() {
+    //     process.exit(1);
+    // }, 100);
 });
 
 
