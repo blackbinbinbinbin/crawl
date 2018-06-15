@@ -1,7 +1,7 @@
 const Controller = require('../framework/Controller.js');
 const TableHelper = require('../framework/lib/TableHelper');
 const Spider = require('../models/Spider');
-
+const Browser = require('../models/Browser');
 /**
  * 首页Controller
  */
@@ -36,7 +36,6 @@ class DefaultController extends Controller {
         task['url'] = args['url'] || rule['demo_url'];
         let objSpider = new Spider(task);
         let content = await objSpider.run(true);
-        await objSpider.closeAllBrowser();
 
         this.exitMsg(content);
     }
@@ -58,7 +57,6 @@ class DefaultController extends Controller {
 
         let objSpider = new Spider(task);
         await objSpider.run();
-        await objSpider.closeAllBrowser();
 
         let logs = objSpider.getLogs();
         this._res.header('Content-Type', 'application/json;charset=' + DEFAULT_CHARSET);
@@ -87,6 +85,63 @@ class DefaultController extends Controller {
 
         let data = {ip, time, time_span};
         this.success(data);
+    }
+
+    async actionTest(args) {
+        const puppeteer = require('puppeteer');
+        const browser = await puppeteer.launch({args: ['--no-sandbox',
+            '--disable-setuid-sandbox']});
+        
+        const page = await browser.newPage();
+        let that = this;
+        //await page.setRequestInterceptionEnabled(true);
+        
+
+        // page.on('requestfailed', request => {
+        //     console.log(request.url() + ' ' + request.failure().errorText);
+        // });
+        let api_request_url = '';
+        let header = '';
+        page.on('request', request => {
+            if (request.url.indexOf('/api/pc/feed/') != -1) {
+                api_request_url = request.url;
+            }
+        });
+        let request_success_url = [];
+        let api_response = '';
+        // page.on('requestfinished', async request => {
+        //     if (request.url.indexOf('/api/pc/feed/') != -1) {
+        //         api_response = request.response().text();
+        //         let content = await page.content();
+        //         request_success_url.push(request.url);
+        //         browser.close();
+        //         var fs = require('fs');
+        //         fs.writeFileSync('./toutiao.html',content);
+        //         this.exitMsg('成功');
+        //     }
+        // });
+        page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/66.0.3359.139 Safari/537.36');
+        await page.goto('https://www.toutiao.com/ch/news_game/', {
+            waitUntil : 'domcontentloaded'
+        });
+
+        let content = await page.content();
+        var fs = require('fs');
+        fs.writeFileSync('./toutiao2.html',content);
+        this.exitMsg('成功');
+        //header = response.headers;
+        //const waitForElement = page.waitForSelector('.item-inner', {visible:true,timeout: 3000});
+
+        //await waitForElement;
+
+        // if (api_request_url) {
+        //     await page.goto(api_request_url);
+        // }
+        //let content = await page.content();
+        // let contexts = browser.browserContexts();
+        // console.log(contexts);
+        // var fs = require('fs');
+        // var text = fs.readFileSync('./toutiao.html', 'utf8');    
     }
 
 }
