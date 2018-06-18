@@ -490,6 +490,12 @@ CREATE TABLE `rule` (
   `need_proxy` tinyint(4) DEFAULT '1' COMMENT '是否需要代理：0:否,1:是'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='爬虫规则表';
 
+/*!40101 SET character_set_client = @saved_cs_client */;
+ALTER TABLE `rule` ADD `parent_rule_id` varchar(100) NULL COMMENT '父规则id' AFTER rule_id;
+
+
+ALTER TABLE `rule` ADD `wait_request_url` VARCHAR(100) NULL COMMENT '等待页面请求的url';
+
 --
 -- Dumping data for table `rule`
 --

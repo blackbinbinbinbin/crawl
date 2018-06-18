@@ -8,6 +8,7 @@ const Tool = require('../framework/lib/Tool.js');
 const iconv = require('iconv-lite');
 const Http = require("http");
 const zlib = require('zlib');
+const Browser = require('../models/Browser');
 
 // 回调里面可能回用到
 const JTool = require('./JTool');
@@ -59,7 +60,9 @@ class Spider {
         this.INSERT_TYPE_ONLY_INSERT = 'only_insert';
         this.INSERT_TYPE_ONLY_UPDATE = 'only_update';
         this.INSERT_TYPE_UPDATE = 'update';
+
         this.state = this.STATE_SUCC;
+        this.skip = false;
         this.http_code = 0;
         Tool.startRecordLog();
     }
@@ -73,7 +76,7 @@ class Spider {
             Tool.error(`error task have no rule. task_id:${this.task.task_id}, rule_id:${this.task.rule_id}`);
             return false;
         }
-
+        await this._mergeRule();
         await this._delayRun();
 
         let startTime = (new Date).getTime();
@@ -86,15 +89,17 @@ class Spider {
         // 找这个任务的规则
         const objItem = new TableHelper('item', 'crawl');
         let items = await objItem.getAll({'rule_id' : this.task.rule_id, 'enable' : 1});
-
-        this.mergeParent(items);
+        await this._mergeItems(items);
 
         let content = '';
         let data = {};
+
         try {
             Tool.log(`爬虫：${this.task.url}`);
             Tool.log(`请求模式：${this.rule.request_mode}，更新模式：${this.rule.update_mode}`);
             JTool.initUrl(this.task.url);
+
+            // this.rule.request_mode = 'headless';
             if (this.rule.request_mode === 'headless') {
                 content = await this._headless();
             } else {
@@ -102,16 +107,30 @@ class Spider {
             }
             // let objRedis = OujRedis.init('logic');
             // content = await objRedis.get('globals:url_map:http://14.17.108.216:9998/previewRule?rule_id=steam:game_data:steamdb&url=');
-
+            Tool.log('http code:' + this.http_code);
             if (preview) {
                 return content;
             }
 
-            if (!content || content.length <= this.rule.min_length) {
+            if (this.skip) {
+                Tool.log('预处理返回了false，当作成功，并跳过处理');
+                this.state = this.STATE_SUCC;
+                this.http_code = 200;
+                if (this.rule.request_mode === 'headless') {
+                    await this.scoreBrowser(this.http_code);
+                }
+            } else if (!content || content.length <= this.rule.min_length) {
                 // 代理出问题，当作超时处理
                 Tool.log('内容过短，代理出问题');
+                if (this.rule.request_mode === 'headless') {
+                    await this.scoreBrowser(0);
+                }
                 this.state = this.STATE_TIMEOUT;
             } else {
+                if (this.rule.request_mode === 'headless') {
+                    await this.scoreBrowser(200);
+                }
+                
                 Tool.log('开始分析页面');
                 let $ = null;
                 let $el = null;
@@ -163,47 +182,58 @@ class Spider {
                 }
             }
 
-            this.http_code = 200;
             await this._logEnd(result.insertId, content, data, startTime);
         } catch (ex) {
-            // 代理出问题的情况
-            let flag = ex.message.indexOf("ERR_PROXY_CONNECTION_FAILED") >= 0;
-            flag = flag || ex.message.indexOf("Error: tunneling socket could not be established") >= 0;
-            flag = flag || ex.message.indexOf("Error: write EPROTO ") >= 0;
-            flag = flag || ex.message.indexOf("Error: socket hang up") >= 0;
-            flag = flag || ex.message.indexOf("Error: ESOCKETTIMEDOUT") >= 0;
-            flag = flag || ex.message.indexOf("Error: Exceeded maxRedirects.") >= 0;
-            flag = flag || ex.message.indexOf("net::ERR_EMPTY_RESPONSE") >= 0;
-            flag = flag || ex.message.indexOf("net::ERR_TUNNEL_CONNECTION_FAILED") >= 0;
-            flag = flag || ex.message.indexOf("net::ERR_INSECURE_RESPONSE") >= 0;
+            if (this.rule.request_mode === 'headless') {
+                await this.closeBrowser();
+            }
+            Tool.err(ex.message);
+            Tool.err(ex.stack);
 
-            // 代理访问慢的情况
-            let flag3 = ex.message.indexOf('Navigation Timeout Exceeded') >= 0;
-            let flag2 = ex.message.indexOf("Most likely the page has been closed") >= 0;
-            if (flag) {
-                this.state = this.STATE_PROXY_ERROR;
-            } else if (flag2 || flag3) {
-                this.state = this.STATE_TIMEOUT;
-            } else {
-                this.state = this.STATE_ERROR;
+            if (preview) {
+                return ex.stack;
             }
 
-            Tool.err(ex.message);
-            // StatusCodeError: 429 -
-            let stack = ex.stack;
-            Tool.err(stack);
+            this._preprocess(ex.message);
+            // 如果需要跳过，则跳过
+            let flag2 = false;
+            if (!this.skip) {
+                // 代理出问题的情况
+                let flag = ex.message.indexOf("Error: ") >= 0;
+                flag = flag || ex.message.indexOf("net::") >= 0;
 
-            let parts = stack.match(/StatusCodeError:\s*(\d+)\s*-/);
-            this.http_code = parts && parts.length > 2 ? parseInt(parts[1]) : 0;
-            if (this.http_code == 403) {
-                this.state = this.STATE_PROXY_ERROR;
+                // 代理访问慢的情况
+                flag2 = ex.message.indexOf('Navigation Timeout Exceeded') >= 0;
+                flag2 = flag2 || ex.message.indexOf("Most likely the page has been closed") >= 0;
+                if (flag) {
+                    this.state = this.STATE_PROXY_ERROR;
+                } else if (flag2) {
+                    this.state = this.STATE_TIMEOUT;
+                } else {
+                    this.state = this.STATE_ERROR;
+                }
+
+                if (!this.http_code) {
+                    this.http_code = parseInt(ex.message);
+                    Tool.err('http_code:' + this.http_code);
+                }
+
+                let error_codes = [403, 429, 502, 503, 504];
+                if (error_codes.indexOf(this.http_code) >= 0) {
+                    this.state = this.STATE_PROXY_ERROR;
+                    // 请求太频繁了
+                    if (this.http_code === 429 || this.http_code === 502) {
+                        let next_crawl_time = php.time() + 300 * php.rand(1, 6);
+                        this._setNextTime(next_crawl_time);
+                    }
+                }
             }
 
             await this._logEnd(result.insertId, content, data, startTime);
 
             if (flag2) {
                 // 异常情况，要重启进程
-                await this.closeAllBrowser();
+                
                 process.exit(0);
             }
         }
@@ -211,23 +241,29 @@ class Spider {
         return content;
     }
 
-    async mergeParent(items) {
+    async _mergeRule() {
         // 继承父规则的数据
         if (this.rule['parent_rule_id']) {
             const objRule = new TableHelper('rule', 'crawl');
-            let parent_rule = await objRule.getRow({'rule_id' : this.rule['parent_rule_id']});
+            let parent_rule = await objRule.getRow({'rule_id': this.rule['parent_rule_id']});
             Tool.log('old rule:' + JSON.stringify(this.rule));
             for (let key in parent_rule) {
                 // enable 不继承
                 if (key === 'enable') continue;
                 // 填充空白数据
-                if (!this.rule[key] && parent_rule[key]) {
+                let flag = !this.rule[key] || this.rule[key] === 'undefined';
+                if (flag && parent_rule[key]) {
                     this.rule[key] = parent_rule[key];
                 }
             }
 
             Tool.log('new rule:' + JSON.stringify(this.rule));
+        }
+    }
 
+    async _mergeItems(items) {
+        // 继承父规则的数据
+        if (this.rule['parent_rule_id']) {
             const objItem = new TableHelper('item', 'crawl');
             let parent_items = await objItem.getAll({'rule_id' : this.rule['parent_rule_id'], 'enable' : 1});
             let items_map = {};
@@ -271,54 +307,6 @@ class Spider {
         }
     }
 
-    // async _GetGbkUrl(url) {
-    //     let options;
-    //     let parts = URL.parse(url);
-    //     options = {
-    //         hostname: parts.hostname,
-    //         port: parts.port || 80,
-    //         path: parts.path,
-    //         method: "GET",
-    //         headers: this.getHeaders(this.rule.header),
-    //         gzip: true
-    //     }
-    //
-    //     if (this.proxy) {
-    //         options.proxy = 'http://' + this.proxy;
-    //     }
-    //
-    //     return new Promise(function(resolve, reject) {
-    //         // 异步处理
-    //         // 处理结束后、调用resolve 或 reject
-    //         let req = Http.request(options,function(res) {
-    //             let chunks = [];
-    //             res.on("data",function(chunk){
-    //                 chunks.push(chunk);
-    //             });
-    //             res.on("end",function() {
-    //                 let content = Buffer.concat(chunks);
-    //                 zlib.gunzip(content, function(err, decoded) {
-    //                     if (err) {
-    //                         let decodedBody = iconv.decode(content.toString('utf-8'), 'gbk');
-    //                         resolve(decodedBody);
-    //                     } else {
-    //                         let decodedBody = iconv.decode(decoded, 'gbk');
-    //                         resolve(decodedBody);
-    //                     }
-    //                 });
-    //             });
-    //
-    //             console.log(res.statusCode);
-    //         });
-    //
-    //         req.on("error",function(err){
-    //             reject(err);
-    //         });
-    //
-    //         req.end();
-    //     });
-    // }
-
     async _request() {
         await this._resetProxy();
 
@@ -334,65 +322,88 @@ class Spider {
 
         // 先decode，再encode，可以把字符给encode，又不会引起多次encode
         let url = encodeURI(decodeURI(this.task.url));
-        let raw_content = await r({
+        let response = await r({
             url : url,
             // jar:  j,
             headers : this.getHeaders(this.rule.header),
             timeout: 60000,
             gzip: true,
-            encoding: null
+            encoding: null,
+            resolveWithFullResponse: true,
+            rejectUnauthorized: false
         });
 
-        let content = raw_content.toString('utf8');
+        this.http_code = response.statusCode;
+        let content = response.body.toString('utf8');
         let $ = cheerio.load(content, { decodeEntities: false });
 
         let head = $('head').html() || '';
         let matches = head.match(/[;\s]charset=['"]?(\w+)['"]?/);
         if (matches && matches[1].match(/gb/ig)) {
-            content = iconv.decode(raw_content, 'gbk');
+            content = iconv.decode(response.body, 'gbk');
         }
 
         return this._preprocess(content);
     }
 
-    async closeAllBrowser() {
-        for (let proxy in pagePool) {
-            // 超过5分钟的浏览器要关闭掉
-            await pagePool[proxy][0].close();
-            await pagePool[proxy][1].close();
-            delete pagePool[proxy];
-            Tool.warning(`closeAllBrowser. delete pagePool:${proxy}`);
+    async scoreBrowser(http_code = '') {
+        if (http_code == 200) {
+            Browser.incScore();
+        } else {
+            Browser.reduceScore();
         }
     }
 
+    async closeBrowser() {
+        await Browser.close();
+    }
+
     async _getPage() {
-        for (let proxy in pagePool) {
-            let span = (new Date).getTime() - pagePool[proxy][2];
-            if (span > 310 * 1000) {
-                // 超过5分钟的浏览器要关闭掉
-                await pagePool[proxy][0].close();
-                await pagePool[proxy][1].close();
-                delete pagePool[proxy];
-                Tool.warning(`delete pagePool:${proxy}, span:${span}`);
-            }
+        // for (let proxy in pagePool) {
+        //     let span = (new Date).getTime() - pagePool[proxy][2];
+        //     if (span > 310 * 1000) {
+        //         // 超过5分钟的浏览器要关闭掉
+        //         await pagePool[proxy][0].close();
+        //         await pagePool[proxy][1].close();
+        //         delete pagePool[proxy];
+        //         Tool.warning(`delete pagePool:${proxy}, span:${span}`);
+        //     }
+        // }
+
+        // if (!pagePool[this.proxy]) {
+        //     const browser = await puppeteer.launch({
+        //         args: await this._getArgs(),
+        //         // headless: false // 用于调试
+        //     });
+
+        //     const page = await browser.newPage();
+        //     const viewport = {
+        //         width : 1440,
+        //         height: 706
+        //     };
+        //     page.setViewport(viewport);
+        //     pagePool[this.proxy] = [page, browser, (new Date).getTime()];
+        // }
+
+        // return pagePool[this.proxy][0];
+
+        var url = this.task.url;
+        var p = URL.parse(this.task.url);
+        var taget_host = p.host;
+        var proxy = this.proxy;
+        if (!this.rule.need_proxy) {
+            proxy = false;
         }
+        await Browser.init(taget_host, proxy);
+        
+        const page = await Browser.newPage();
+        const viewport = {
+            width : 1440,
+            height: 706
+        };
+        page.setViewport(viewport);
 
-        if (!pagePool[this.proxy]) {
-            const browser = await puppeteer.launch({
-                args: await this._getArgs(),
-                // headless: false // 用于调试
-            });
-
-            const page = await browser.newPage();
-            const viewport = {
-                width : 1440,
-                height: 706
-            };
-            page.setViewport(viewport);
-            pagePool[this.proxy] = [page, browser, (new Date).getTime()];
-        }
-
-        return pagePool[this.proxy][0];
+        return page;
     }
 
     async _headlessCookie(page, headers) {
@@ -432,17 +443,47 @@ class Spider {
         let cookies = await page.cookies(this.task.url);
         Tool.log(cookies);
 
+
         // 开始爬虫
-        await page.goto(this.task.url, {
-            waitUntil : 'domcontentloaded'
+        if (!headers['User-Agent']) {
+            //因为在请求中有些api会针对 user-agent 做限制，所以动态做一下调整
+            let ua = uaList[Math.floor((Math.random()*uaList.length))];
+            page.setUserAgent(ua);
+        }
+
+        if (this.rule.wait_request_url) {
+            page.on('request', request => {
+                if (request.url.indexOf(this.rule.wait_request_url) != -1) {
+                    Tool.log('请求api链接：' + request.url);
+                }
+            });
+            await page.on('requestfinished', async request => {
+                if (request.url.indexOf(this.rule.wait_request_url) != -1) {
+                    Tool.log('【success】请求api成功：' + this.rule.wait_request_url);
+                    let api_response = await request.response().text();
+                    Tool.log('请求api内容：' + api_response);
+                }
+            });
+            await page.on('requestfailed', async request => {
+                if (request.url.indexOf(this.rule.wait_request_url) != -1) {
+                    Tool.log('【error】请求api失败：' + this.rule.wait_request_url);
+                }
+            });
+        }
+        
+        //开始打开页面
+        let response = await page.goto(this.task.url, {
+            waitUntil : 'networkidle2'
+
             // waitUntil : 'load'
         });
-
+        if (this.rule.wait_request_url) {
+            await page.waitFor(250);
+        }
         await this._waitRequired(page);
 
+        this.http_code = response.status;
         let content = await page.content();
-        // await browser.close();
-        // await page.close();
         return this._preprocess(content, page);
     }
 
@@ -541,14 +582,6 @@ class Spider {
             }
         } else if (this.state === this.STATE_PROXY_ERROR) {
             score = -20;
-        } else {
-            // 请求太频繁了
-            if (this.http_code === 429) {
-                let next_crawl_time = php.time() + 600;
-                this._setNextTime(next_crawl_time);
-                score = -1;
-            }
-            // score = -2;
         }
 
         if (score && this.proxy) {
@@ -583,7 +616,10 @@ class Spider {
 
         let index = php.rand(0, uaList.length - 1);
         let ua = uaList[index];
-        headers['User-Agent'] = headers['User-Agent'] || ua;
+        if (this.rule.request_mode != 'headless' || !this.rule.wait_request_url) {
+            headers['User-Agent'] = headers['User-Agent'] || ua;
+        }
+        
         return headers;
     }
 
@@ -609,7 +645,7 @@ class Spider {
             // '--proxy-server=211.138.60.25:80'
         ];
 
-        if (this.proxy) {
+        if (this.proxy && this.rule.need_proxy) {
             args.push(`--proxy-server=${this.proxy}`);
         }
 
@@ -628,25 +664,38 @@ class Spider {
         }
     }
 
-    _preprocess(content, page) {
+    async _preprocess(content, page) {
+        if (this.rule.data_type === 'json') {
+            content = content.trim();
+            let lastChar = php.substr(content, -1);
+            if (lastChar === ')') {
+                let pos = content.indexOf('(');
+                content = content.substr(pos + 1, content.length - pos - 2);
+            }
+        }
+
         let preprocess = this.rule.preprocess && this.rule.preprocess.trim();
         if (preprocess) {
-            let func = php.create_function('$html, $, page, JTool, Tool', preprocess);
+            let func = php.create_function('$html, $, page, _task, JTool, Tool', preprocess);
 
             let $ = null;
             let $html = null;
             if (this.rule.data_type === 'html') {
                 $ = cheerio.load(content, { decodeEntities: false });
+                JTool.initJquery($);
 
                 $html = $('html');
-                func($html, $, page, JTool, Tool);
+                let flag = func($html, $, page, this.task, JTool, Tool);
+                if (flag === false) {
+                    this.skip = true;
+                }
                 return $('<div></div>').html($html).html();
             } else if (this.rule.data_type === 'json') {
                 $html = content;
                 return func($html, $, page, JTool, Tool);
             }
         }
-
+        
         return content;
     }
 
@@ -723,46 +772,54 @@ class Spider {
     }
 
     _handle(item, $, $el) {
-        let func = php.create_function('$el, $, _task, JTool, Tool', item.fetch_value);
-
-        let new_task_key = item.new_task_key && item.new_task_key.trim();
-        let task_key_func = new_task_key && php.create_function('$el, $, _task, JTool, Tool', item.new_task_key);
-
-        let $els = $el;
         if ($) {
-            $els = $el = this._getElem($, item.selector);
-            if ($els.length === 0) {
+            // html模式才需要获取元素
+            $el = this._getElem($, item.selector);
+            if ($el.length === 0) {
                 return false;
             }
         }
 
-        let value = null;
-        let task_key = null;
-        if (item.is_multi && this.rule.data_type === 'html') {
-            value = [];
-            task_key = [];
-            for (let i = 0; i < $els.length; i++) {
-                $el = $($els[i]);
-                let v = func($el, $, this.task, JTool, Tool);
-                value.push(v);
-                if (task_key_func) {
-                    task_key.push(task_key_func($el, $, this.task, JTool, Tool));
-                } else {
-                    task_key.push(v);
-                }
-            }
-        } else {
-            // $el = $($els[0]); // 这个会出问题
-            value = func($el, $, this.task, JTool, Tool);
-            if (task_key_func) {
-                task_key = task_key_func($el, $, this.task, JTool, Tool);
-            } else {
-                task_key = value;
-            }
+        let value = this._fetchVal2($el, item, false, $);
+        let task_key = this._fetchVal2($el, item, true, $);
+
+        if (!task_key) {
+            task_key = value;
         }
 
         return {value, task_key};
     }
+
+    _fetchVal2($el, item, iskey, $) {
+        // var key = iskey ? item.field_name + '-new_task_key' : item.field_name;
+        // var func = __crawPage[key];
+        let str = iskey ? item.new_task_key : item.fetch_value;
+        if (!str) {
+            return null;
+        }
+
+        let func = php.create_function('$el, $, _task, JTool, Tool', str);
+        if (!func) {
+            console.error('can not find:' + key);
+            return null;
+        }
+
+        if (item.is_multi && this.rule.data_type === 'html') {
+            let value = [];
+            for (let i = 0; i < $el.length; i++) {
+                let val = func($($el[i]), $, this.task, JTool, Tool);
+                if (Array.isArray(val)) {
+                    return val;
+                } else {
+                    value[i] = val;
+                }
+            }
+            return value;
+        } else {
+            return func($el, $, this.task, JTool, Tool);
+        }
+    }
+
 
     _predoRuleId(item) {
         if (!this.rule.parent_rule_id) {
@@ -808,7 +865,7 @@ class Spider {
         value = php.array_chunk(value, batchNum);
         task_key = php.array_chunk(task_key, batchNum);
         for (let batchIndex in value) {
-            let key = task_key[batchIndex] || value[batchIndex];
+            let key = task_key[batchIndex];
             where['task_key'] = key;
 
             let task_keys = await objTask.getCol(where, {_field : 'task_key'});
@@ -820,13 +877,15 @@ class Spider {
             let datas = [];
             let now = php.date('Y-m-d H:i:s');
             for (let i in key) {
-                if (!map[key[i]]) {
-                    map[key[i]] = 1; // 防止自身就有重复链接
+                let task_key = key[i];
+                let url = value[batchIndex][i];
+                if (task_key && url && !map[task_key]) {
+                    map[task_key] = 1; // 防止自身就有重复链接
                     datas.push({
                         parent_task_id : this.task.task_id,
                         rule_id : item.next_rule_id,
-                        url : value[batchIndex][i],
-                        task_key : key[i],
+                        url : url,
+                        task_key : task_key,
                         create_time : now,
                         update_time : now,
                     });
