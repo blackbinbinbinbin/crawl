@@ -7,6 +7,7 @@ class Router {
     constructor(url) {
         //var parts = url.match("http[s]*://[^/]+/([^/]+)/([^/?]+)");
         let parts = url.match(/(http[s]*:\/\/[^/]+)?\/([^/]+)\/([^/?]+)/);
+
         if (parts && parts.length >= 4) {
             this.controllerName = parts[2];
             this.actionName = parts[3];
