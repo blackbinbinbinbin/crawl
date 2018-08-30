@@ -9,6 +9,7 @@ const iconv = require('iconv-lite');
 const Http = require("http");
 const zlib = require('zlib');
 const Browser = require('../models/Browser');
+const AmcMsg = require('../models/AmcMsg');
 
 // 回调里面可能回用到
 const JTool = require('./JTool');
@@ -99,12 +100,14 @@ class Spider {
             Tool.log(`请求模式：${this.rule.request_mode}，更新模式：${this.rule.update_mode}`);
             JTool.initUrl(this.task.url);
 
-            // this.rule.request_mode = 'headless';
+            //this.rule.request_mode = 'headless';
             if (this.rule.request_mode === 'headless') {
                 content = await this._headless();
             } else {
                 content = await this._request();
             }
+            
+
             // let objRedis = OujRedis.init('logic');
             // content = await objRedis.get('globals:url_map:http://14.17.108.216:9998/previewRule?rule_id=steam:game_data:steamdb&url=');
             Tool.log('http code:' + this.http_code);
@@ -359,34 +362,6 @@ class Spider {
     }
 
     async _getPage() {
-        // for (let proxy in pagePool) {
-        //     let span = (new Date).getTime() - pagePool[proxy][2];
-        //     if (span > 310 * 1000) {
-        //         // 超过5分钟的浏览器要关闭掉
-        //         await pagePool[proxy][0].close();
-        //         await pagePool[proxy][1].close();
-        //         delete pagePool[proxy];
-        //         Tool.warning(`delete pagePool:${proxy}, span:${span}`);
-        //     }
-        // }
-
-        // if (!pagePool[this.proxy]) {
-        //     const browser = await puppeteer.launch({
-        //         args: await this._getArgs(),
-        //         // headless: false // 用于调试
-        //     });
-
-        //     const page = await browser.newPage();
-        //     const viewport = {
-        //         width : 1440,
-        //         height: 706
-        //     };
-        //     page.setViewport(viewport);
-        //     pagePool[this.proxy] = [page, browser, (new Date).getTime()];
-        // }
-
-        // return pagePool[this.proxy][0];
-
         var url = this.task.url;
         var p = URL.parse(this.task.url);
         var taget_host = p.host;
@@ -394,14 +369,14 @@ class Spider {
         if (!this.rule.need_proxy) {
             proxy = false;
         }
-        await Browser.init(taget_host, proxy);
+        let browser = await Browser.init(proxy);
         
         const page = await Browser.newPage();
         const viewport = {
             width : 1440,
             height: 706
         };
-        page.setViewport(viewport);
+        await page.setViewport(viewport);
 
         return page;
     }
@@ -432,7 +407,7 @@ class Spider {
         // 设置头部
         let headers = this.getHeaders(this.rule.header);
         await this._resetProxy();
-        if (!this.proxy) {
+        if (!this.proxy && this.rule.need_proxy) {
             return '';
         }
 
@@ -453,19 +428,21 @@ class Spider {
 
         if (this.rule.wait_request_url) {
             page.on('request', request => {
-                if (request.url.indexOf(this.rule.wait_request_url) != -1) {
-                    Tool.log('请求api链接：' + request.url);
+                var request_url = request.url();
+                if (request_url.indexOf(this.rule.wait_request_url) != -1) {
+                    Tool.log('请求api链接：' + request.url());
                 }
             });
-            await page.on('requestfinished', async request => {
-                if (request.url.indexOf(this.rule.wait_request_url) != -1) {
+            page.on('requestfinished', async request => {
+                
+                if (request.url().indexOf(this.rule.wait_request_url) != -1) {
                     Tool.log('【success】请求api成功：' + this.rule.wait_request_url);
                     let api_response = await request.response().text();
                     Tool.log('请求api内容：' + api_response);
                 }
             });
-            await page.on('requestfailed', async request => {
-                if (request.url.indexOf(this.rule.wait_request_url) != -1) {
+            page.on('requestfailed', async request => {
+                if (request.url().indexOf(this.rule.wait_request_url) != -1) {
                     Tool.log('【error】请求api失败：' + this.rule.wait_request_url);
                 }
             });
@@ -473,19 +450,43 @@ class Spider {
         
         //开始打开页面
         let response = await page.goto(this.task.url, {
-            waitUntil : 'networkidle2'
+            waitUntil : 'domcontentloaded'
 
             // waitUntil : 'load'
         });
-        if (this.rule.wait_request_url) {
-            await page.waitFor(250);
-        }
+        
+        await this._autoScroll(page);
+
         await this._waitRequired(page);
 
-        this.http_code = response.status;
+        this.http_code = response.status();
         let content = await page.content();
+
         return this._preprocess(content, page);
     }
+
+    //页面懒加载-滚动
+    async _autoScroll(page) {
+        return page.evaluate(() => {
+            return new Promise((resolve, reject) => {
+                var scroll_count = 0;
+                var totalHeight = 0;
+                var distance = 100;
+                var timer = setInterval(() => {
+                    var scrollHeight = document.body.scrollHeight;
+                    window.scrollBy(0, distance);
+                    totalHeight += distance;
+
+                    if(totalHeight >= scrollHeight || scroll_count > 30){
+                        clearInterval(timer);
+                        resolve();
+                    }
+                    scroll_count++;
+                }, 100);
+            })
+        });
+    }
+
 
     async _setNextTime(next_crawl_time) {
         // next_crawl_time = 0;
@@ -559,6 +560,19 @@ class Spider {
             let where = {log_id};
             await objCrawlLog.updateObject(logData, where);
 
+            //通用告警
+            var errMsgList = this.getLogs().substr(0, 500000).match(/【error】([^\n]+)\n/);
+            if (errMsgList) {
+                var errMsg = '';
+                if (errMsgList && errMsgList[1]) {
+                    errMsg = errMsgList[1];
+                    errMsg = errMsg.substr(0, 50);
+                    var result = await this.recordAmcMsg(errMsg);
+                    Tool.log(`【AMC_Msg】` + JSON.stringify(result));
+                }
+            }
+            
+
             // 成功后，才修改下一阶段的时间
             if (this.state === this.STATE_SUCC || this.state === this.STATE_PART_SUCC) {
                 let interval = this.task['interval'] || this.rule['interval'];
@@ -566,6 +580,47 @@ class Spider {
                 await this._setNextTime(next_crawl_time);
             }
         }
+    }
+
+    //通用告警
+    async recordAmcMsg(errMsg) {
+        if (errMsg !== '' && errMsg.indexOf('waiting for selector')  !== -1) {
+            return;
+        }
+        //过滤掉 400,401,404
+        if (errMsg.match(/4[\d]{2}\s-/)) {
+            return;
+        }
+        //过滤掉 5xx
+        if (errMsg.match(/5[\d]{2}\s-/)) {
+            return;
+        }
+        if (this.http_code == 400 || this.http_code == 401 || this.http_code == 404) {
+            return;
+        }
+        //过滤掉超时，代理错误，成功的状态
+        if (this.state == this.STATE_TIMEOUT || this.state == this.STATE_PROXY_ERROR || this.state == this.STATE_SUCC || this.state == this.STATE_EXECING || this.state == this.STATE_PART_SUCC) {
+            return;
+        }
+
+        let objAmcMsg = new AmcMsg;
+
+        var msg_code = -1;
+        if (!msg_code) {
+            msg_code = -1;
+        }
+        var creator = this.rule.creator;
+        if (!creator) {
+            creator = 'spider';
+        }
+        var rule_id = this.rule.rule_id;
+        var rule_name = this.rule.rule_name;
+        var msg_content = `【${creator}】的《${rule_name}》（${rule_id}）有异常： ${errMsg}`;
+        let ret = await objAmcMsg.recordMsg(msg_code, msg_content);
+        if (ret.length == 0) {
+            return false;
+        }
+        return ret;
     }
 
     reportProxy(exec_timespan) {
@@ -661,6 +716,14 @@ class Spider {
                 waitFor = waitForInt;
             }
             await page.waitFor(waitFor);
+        } else {
+            //如果没有等待条件 wait_for 取 item 内一条必填的选择器当做等待
+            const objItem = new TableHelper('item', 'crawl');
+            let require_item = await objItem.getRow({'rule_id' : this.task.rule_id, 'enable' : 1, 'require' : 1});
+            if (require_item) {
+                Tool.log(`【timeout】wait for item selector(item.field_name=${require_item.field_name}):`+ require_item.selector);
+                await page.waitForSelector(require_item.selector);
+            }
         }
     }
 
@@ -1075,7 +1138,7 @@ class Spider {
             await this._notifyUrl(log_id, table.notice_url, result);
 
             // 图片/视频 转存信息
-            await this._saveasData(table, items2, saveasItems, result.datas);
+            await this._saveasData(table, items2, saveasItems, result.datas, result.temp_saveas_fields);
         }
     }
 
@@ -1166,31 +1229,67 @@ class Spider {
         return {oldDatas, datas};
     }
 
-    async _saveasData(table, items2, saveasItems, datas) {
+    async _saveasData(table, items2, saveasItems, datas, temp_saveas_fields) {
         let table_name = table.table_name;
-        if (!saveasItems[table_name] || php.empty(datas)) {
+        if ((!saveasItems[table_name] && php.empty(temp_saveas_fields)) || php.empty(datas)) {
             return false;
         }
 
         let saveasArr = [];
+        let insert_saveas_data_ids = [];
         for (let whereStr in datas) {
             let allData = datas[whereStr];
             // 判断是否存在转存字段
-            for (let field_name of saveasItems[table_name]) {
-                if (!allData[field_name]) {
-                    continue;
-                }
+            if (saveasItems[table_name]) {
+                for (let field_name of saveasItems[table_name]) {
+                    if (!allData[field_name]) {
+                        continue;
+                    }
 
-                let item = items2[table_name][field_name];
-                saveasArr.push({
-                    saveas_data_id : php.md5(table.db_id + '|' + whereStr),
-                    db_id : table.db_id,
-                    key_value : whereStr,
-                    save_as : item['save_as'],
-                    save_as_referer : item['save_as_referer'],
-                    field_name
-                });
+                    let item = items2[table_name][field_name];
+                    if (insert_saveas_data_ids.indexOf(table.db_id + '|' + whereStr + '|' + field_name) == '-1') {
+                        saveasArr.push({
+                            saveas_data_id : php.md5(table.db_id + '|' + whereStr + '|' + field_name),
+                            db_id : table.db_id,
+                            key_value : whereStr,
+                            save_as : item['save_as'],
+                            save_as_referer : item['save_as_referer'],
+                            field_name
+                        });
+
+                        insert_saveas_data_ids.push(table.db_id + '|' + whereStr + '|' + field_name);
+                    }
+                }
             }
+            
+
+            //临时表合并过来的数据需要检查是否插入转存
+            if (temp_saveas_fields[whereStr]) {
+                let temp_data = temp_saveas_fields[whereStr];
+                for (let temp_field in temp_data) {
+                    if (!allData[temp_field]) {
+                        continue;
+                    }
+
+                    if (insert_saveas_data_ids.indexOf(table.db_id + '|' + whereStr + '|' + temp_field) == '-1') {
+                        let saveas_db_id = table.db_id;
+                        if (temp_data[temp_field].db_id) {
+                            saveas_db_id = temp_data[temp_field].db_id;
+                        }
+                        saveasArr.push({
+                            saveas_data_id : php.md5(table.db_id + '|' + whereStr + '|' + temp_field),
+                            db_id : saveas_db_id,
+                            key_value : whereStr,
+                            save_as : temp_data[temp_field].save_as,
+                            save_as_referer : temp_data[temp_field].save_as_referer,
+                            field_name : temp_field
+                        });
+
+                        insert_saveas_data_ids.push(table.db_id + '|' + whereStr + '|' + temp_field);
+                    }
+                }
+            }
+            
         }
 
         try {
@@ -1275,7 +1374,7 @@ class Spider {
 
             let datas = await objTempData.getAll(where);
             for (let data of datas) {
-                tempDatas[data.db_id + data.temp_key] = data.temp_value;
+                tempDatas[data.db_id + data.temp_key] = {"temp_value": data.temp_value, "temp_saveas_data": data.temp_saveas_data, "db_id": table.db_id};
             }
 
             objTempData.updateObject({'create_time': '2000-01-01'}, where);
@@ -1334,8 +1433,16 @@ class Spider {
         let prefix = `db_name:${table.db_name}, table:${table.table_name}: `;
 
         let objTempData = new TableHelper('temp_data', 'crawl');
+        let need_saveas_data = {};
+        for (let key in items[table.table_name]) {
+            if (items[table.table_name][key]['save_as'] > 0) {
+                need_saveas_data[key] = {'save_as': items[table.table_name][key]['save_as'], 'save_as_referer': items[table.table_name][key]['save_as_referer']};
+            }
+        }
+
 
         let onlyUpdataDatas = [];
+        let temp_saveas_fields = {};
         try {
             for (let i = 0; i < len; i++) {
                 onlyInsertArr[i] = onlyInsertArr[i] || {};
@@ -1367,21 +1474,35 @@ class Spider {
                     if (!php.empty(newData)) {
                         // 判断是否有暂存数据，如果有则合并
                         if (tempDatas) {
-                            let temp_value = tempDatas[table.db_id + php.md5(whereStr)];
-                            if (temp_value) {
+                            if (tempDatas[table.db_id + php.md5(whereStr)] != undefined) {
+                                let temp_value = tempDatas[table.db_id + php.md5(whereStr)].temp_value;
                                 temp_value = JSON.parse(temp_value);
                                 newData = Object.assign(temp_value, newData);
                             }
                         }
 
                         await objTable.addObject(newData);
+                        if (tempDatas[table.db_id + php.md5(whereStr)] != undefined) {
+                            let temp_saveas_data = tempDatas[table.db_id + php.md5(whereStr)].temp_saveas_data;
+                            temp_saveas_data = JSON.parse(temp_saveas_data);
+                            temp_saveas_fields[whereStr] = temp_saveas_data;
+                        }
+                        
                         datas[whereStr] = newData;
                     } else if (!php.empty(onlyUpdateArr)) {
                         // 处理暂存的数据
                         let db_id = table.db_id;
                         let temp_key = php.md5(whereStr);
                         let temp_value = JSON.stringify(onlyUpdateArr[i]);
-                        onlyUpdataDatas.push({db_id, temp_key, temp_value});
+                        let temp_saveas_data = {}
+                        for (let field in onlyUpdateArr[i]) {
+                            if (need_saveas_data[field]) {
+                                temp_saveas_data[field] = need_saveas_data[field];
+                            }
+                        }
+
+                        temp_saveas_data = JSON.stringify(temp_saveas_data);
+                        onlyUpdataDatas.push({db_id, temp_key, temp_value, temp_saveas_data});
                     } else {
                         Tool.log(prefix + "没有'只插入'或'更新'的数据");
                     }
@@ -1432,7 +1553,7 @@ class Spider {
             Tool.err(ex.stack);
         }
 
-        return {oldDatas, datas};
+        return {oldDatas, datas, temp_saveas_fields};
     }
 
     _getWhere(allData, priKey) {

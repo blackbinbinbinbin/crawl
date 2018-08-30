@@ -10,37 +10,39 @@ const ProxyPool = require('../models/ProxyPool');
 
 let map = {};
 let page = null;
+let browser_pid = null;
 class Browser {
-	static async init(host, proxy = false) {
+	static async init(proxy = false) {
 		//如果 map 是空对象数组，那么说明是程序退出然后守护进程重启了，需要先杀死所有的 chrome 
 		//因为 browser.process() 拿不到程序id，所以只能 ps 查看所有的 chrome 然后杀掉进程
-		try {
-			if (Object.keys(map).length == 0) {
-				await this.killAllChrome();	
-			}
-			
-			await this.checkBrowser();
-			if (!map.browser) {
-				const objProxyPool = new ProxyPool();
-	        	let proxyList = await objProxyPool.getXProxyBest(host);
+		if (Object.keys(map).length == 0) {
+			//await this.killAllChrome();	
+		}
+		
+		await this.checkBrowser();
+		if (!map.browser) {
+			try {
+				Tool.log("hava no browser");
 	        	let args = ['--no-sandbox','--disable-setuid-sandbox'];
 
 		        if (proxy) {args.push(`--proxy-server=${proxy}`);}
 
 		        let browser = await puppeteer.launch({
-			        args: args
+			        args: args,
+			        handleSIGINT: false
 			    });
+			    process.on('SIGINT', () => { browser.close(); process.exit(130); })
 
 		        var date = new Date();
 				var now = Math.floor(date.getTime()/1000); 
 				map = {browser: browser, expire: now + 15 * 60, score: 0};
-			}
-  
-    	} catch (ex) {
-    		await this.close();
-    	}
-
-    	return map.browser;
+	    	} catch (ex) {
+	    		await this.close();
+	    	}
+    	} else {
+			Tool.log("hava browser");
+			return map.browser;
+		}
     }
 
     static async checkBrowser() {
@@ -70,7 +72,7 @@ class Browser {
 
     //杀死可能是上一个错误使得 chrome 没有杀死的所有浏览器进程
     static async killAllChrome() {
-    	const cmdStr = 'ps -A -opid,etime,args | grep "/protected/node_modules/_puppeteer"';
+    	const cmdStr = 'ps -A -opid,etime,args | grep "/protected/node_modules/puppeteer"';
     	let that = this;
 	    // const cmdStr = 'ps -A -opid,etime,args | grep Chrome';
 	    exec(cmdStr, function(err, stdout, stderr){
@@ -92,7 +94,7 @@ class Browser {
 	                }
 
 	                if (cmd) {
-	                    // console.log(`${index}: ${cmd}, time:${data.time}`);
+	                    // Tool.log(`${index}: ${cmd}, time:${data.time}`);
 	                    exec(cmd, function(err, stdout, stderr) {
 	                        Tool.log(`${index}: ${cmd}, time:${data.time}, stdout:${stdout}, stderr:${stderr}`);
 	                    });
@@ -137,8 +139,10 @@ class Browser {
 			return null;
 		} else {
 			if (page) {
+				Tool.log("hava page");
 				return page;
 			} else {
+				Tool.log("hava no page");
 				page = await map.browser.newPage();
 				return page;
 			}	
@@ -152,7 +156,7 @@ module.exports = Browser;
 /*** Usage:
 *
 const Browser = require('../models/Browser');
-let browser = await Browser.init(args['host'], false);
+let browser = await Browser.init();
 var map = await Browser.getBrowserMap();
 let page = await browser.newPage();
 await page.goto("http://www.baidu.com");
@@ -160,7 +164,7 @@ new Promise(async () => {
     let content = await page.content();
     console.log(content);
     if (!content) {
-        await Browser.close(args['host']);
+        await Browser.close();
     }
 });
 Browser.closAll();
