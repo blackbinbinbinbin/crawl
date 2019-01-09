@@ -1,2 +1,2 @@
 # crawl
-dw-spider
+spider-framework
